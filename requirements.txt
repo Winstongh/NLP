@@ -1,0 +1,5 @@
+torch>=2.1
+datasets>=2.18
+pyyaml>=6.0
+tqdm>=4.66
+sacrebleu>=2.4
