@@ -1,4 +1,0 @@
-{"src": "hello", "tgt": "你好"}
-{"src": "machine translation", "tgt": "机器翻译"}
-{"src": "this model is small", "tgt": "这个模型很小"}
-{"src": "we use pytorch", "tgt": "我们使用pytorch"}

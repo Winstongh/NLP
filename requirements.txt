@@ -1,5 +1,8 @@
 torch>=2.1
-datasets>=2.18
+# datasets 4.0+ 移除了 dataset-script 支持，而 IWSLT/iwslt2017 是脚本式数据集，
+# 因此固定 datasets<4 且搭配 huggingface_hub<1.0（否则 hf:// URI 解析会报错）。
+datasets==2.21.0
+huggingface_hub==0.24.6
 pyyaml>=6.0
 tqdm>=4.66
 sacrebleu>=2.4

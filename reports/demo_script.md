@@ -1,79 +1,65 @@
-# 1-2 分钟程序演示视频脚本
+# 1–2 分钟程序演示视频脚本（cmn-eng-simple）
 
-## 0:00-0:15 项目简介
+> 目标：1–2 分钟内展示「数据 → 训练 → 评估(BLEU) → 翻译」完整流程。
+> 录屏前先 `conda activate nmt`，工作目录 `/home/zj/cw/NLP`。
 
-展示项目目录，说明本项目实现了一个 PyTorch 自实现 Transformer 英译中系统，包含数据准备、训练、评估和推理。
-
-建议画面：
-
-```bash
-tree -L 3
-```
-
-## 0:15-0:35 数据准备
-
-说明使用 IWSLT 2017 `iwslt2017-en-zh`，英文为源语言，中文为目标语言。展示数据准备命令和生成的 JSONL、词表文件。
+## 0:00–0:15 项目简介
+说明：PyTorch **自实现** Transformer Encoder-Decoder，英文→中文翻译，数据集 cmn-eng-simple（train 18000 / valid 500 / test 2636），评测指标 **BLEU**。
 
 建议画面：
-
 ```bash
-python scripts/prepare_data.py --output-dir data/iwslt2017 --max-train-samples 20000
-ls data/iwslt2017
-head -n 2 data/iwslt2017/train.jsonl
+ls src/nmt/                 # 自实现模型/训练/评估/推理源码
+head -2 data/cmn/train.jsonl   # 数据样例（英文/中文）
 ```
 
-## 0:35-0:55 模型训练
-
-展示训练命令和日志，说明 loss 下降、保存 checkpoint。
-
-建议画面：
+## 0:15–0:35 数据准备
+说明：数据已分词（英文 BPE、中文 jieba 词），脚本转成 jsonl 并构建词表。
 
 ```bash
-python scripts/train.py --config configs/rtx4090.yaml --device cuda
-tail -n 3 checkpoints/iwslt2017_en_zh/train_log.jsonl
+python scripts/prepare_cmn.py
+# train=18000 valid=500 test=2636 ; en vocab=4404 zh vocab=9886
 ```
 
-如果正式训练时间太长，视频中可以展示已经训练好的日志和 checkpoint。
-
-## 0:55-1:15 模型评估
-
-展示测试集评估命令，说明输出包含 loss、token accuracy、BLEU 和翻译样例。
-
-建议画面：
+## 0:35–0:55 训练
+说明：小模型（d256/4+4，pre-norm+权重绑定）抑制过拟合；展示训练日志中 loss 下降、valid_acc 上升。
 
 ```bash
-python scripts/evaluate.py \
-  --checkpoint checkpoints/iwslt2017_en_zh/best.pt \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --split test \
-  --device cuda
+python scripts/train.py --config configs/cmn.yaml --device cuda
+# 实时日志见 reports/cmn_training_log.txt：valid_acc 0.13 → 0.63
+tail -n 5 reports/cmn_training_log.txt
 ```
+（视频中可直接展示已训练好的日志，无需现场等训。）
 
-## 1:15-1:45 交互式翻译
-
-展示输入英文句子并输出中文翻译。
-
-建议画面：
+## 0:55–1:20 评估（BLEU）
+说明：权重平均 + beam search，在 2636 句测试集上算**词级 BLEU**。
 
 ```bash
-python scripts/translate.py \
-  --checkpoint checkpoints/iwslt2017_en_zh/best.pt \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --device cuda
+python scripts/average_checkpoints.py \
+  --checkpoints checkpoints/cmn/epoch_{51,52,53,54,55,56,57,58,59,60}.pt \
+  --output checkpoints/cmn/avg.pt
+
+python scripts/evaluate.py --checkpoint checkpoints/cmn/avg.pt \
+  --config checkpoints/cmn/config.yaml --split test --device cuda --beam-size 5 --bleu-samples 3000
+# 输出：token_accuracy ≈ 0.62, bleu ≈ 25.7
 ```
 
-示例输入：
+## 1:20–1:50 翻译演示
+说明：现场输入英文句子，输出中文译文。
 
+```bash
+python scripts/translate.py --checkpoint checkpoints/cmn/avg.pt \
+  --config checkpoints/cmn/config.yaml --beam-size 5 --device cuda \
+  --text "now is the time to act ."
+# → 现在是行动的时候了。
+```
+可多翻几句（输入用小写、空格分词的形式）：
 ```text
-This talk is about machine translation.
-We use a transformer model.
+do n't underestimate my power .      → 不要低估我的力量。
+you have n't changed at all .        → 你一点都没变。
+tom is a student .                   → 汤姆是学生。
 ```
 
-## 1:45-2:00 总结
-
-总结项目完成了：
-
-- Transformer 模型自实现。
-- IWSLT 数据准备和词表构建。
-- 训练、评估和推理完整流程。
-- 可复现实验报告和演示视频材料。
+## 1:50–2:00 总结
+- 自实现 Transformer，完整数据/训练/评估/推理流程。
+- 测试集 **词级 BLEU 25.72 / token 准确率 62.4%**。
+- 关键点：修复训练调度 bug、pre-norm+权重绑定+checkpoint averaging。

@@ -1,0 +1,45 @@
+seed: 42
+
+# 指定数据集 cmn-eng-simple（18k/500/2636）。数据已分词：英文 BPE、中文 jieba 词，
+# 空格分隔，故 pretokenized=true（按空格切分），BLEU 以词为单位。
+data:
+  train_path: data/cmn/train.jsonl
+  valid_path: data/cmn/validation.jsonl
+  test_path: data/cmn/test.jsonl
+  src_vocab_path: data/cmn/vocab.en.json
+  tgt_vocab_path: data/cmn/vocab.zh.json
+  pretokenized: true
+  src_max_len: 64
+  tgt_max_len: 64
+  num_workers: 4
+
+# 数据小(18k)，用较小模型 + 较强 dropout 抑制过拟合；保留 pre-norm + 权重绑定。
+model:
+  d_model: 256
+  n_heads: 4
+  num_encoder_layers: 4
+  num_decoder_layers: 4
+  dim_feedforward: 1024
+  dropout: 0.3
+  max_len: 256
+  norm_first: true
+  tie_embeddings: true
+
+train:
+  output_dir: checkpoints/cmn
+  batch_size: 128
+  epochs: 60
+  learning_rate: 1.0
+  warmup_steps: 2000
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  grad_clip: 1.0
+  log_every: 50
+  eval_every_epochs: 1
+  save_every_epochs: 1
+  save_epoch_checkpoints: true
+  amp: true
+
+decode:
+  max_len: 64
+  num_examples: 10

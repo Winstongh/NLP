@@ -58,6 +58,28 @@ def detokenize_en(tokens: Iterable[str]) -> str:
     return text.strip()
 
 
+def whitespace_tokenize(text: str) -> List[str]:
+    """For data that is already tokenized (space-separated), e.g. cmn-eng-simple."""
+
+    return str(text).split()
+
+
+def join_zh_words(tokens: Iterable[str]) -> str:
+    """Join word-segmented Chinese tokens into a sentence (no spaces)."""
+
+    return "".join(tokens).strip()
+
+
+def join_spaced(tokens: Iterable[str]) -> str:
+    """Join tokens with single spaces, keeping word boundaries.
+
+    Used as the detokenizer for already-tokenized (word-segmented) data so that
+    BLEU can re-split on whitespace and compare word n-grams correctly.
+    """
+
+    return " ".join(t for t in tokens if t).strip()
+
+
 def normalize_text(text: str) -> str:
     """Normalize whitespace without changing language-specific characters."""
 

@@ -1,171 +1,77 @@
-# 基于 Transformer 的英译中机器翻译
+# 基于 Transformer 的英译中机器翻译（cmn-eng-simple）
 
-这是一个用于 NLP 课程实践的 PyTorch 项目：从零实现 Transformer Encoder-Decoder，并完成英文到中文的机器翻译训练、评估和推理。
+用 PyTorch **从零自实现** Transformer Encoder-Decoder，完成英文→中文翻译。
+输入：一句英文（如 `tom is a student .`）；输出：中文（`汤姆是个学生。`）。
 
-项目默认使用 IWSLT 2017 `iwslt2017-en-zh` 数据集。数据集主页：https://huggingface.co/datasets/IWSLT/iwslt2017
+- 数据集：`cmn-eng-simple`（train 18000 / valid 500 / test 2636）
+- 评测指标：**BLEU**（词级）
+- **测试集结果：词级 BLEU 25.72 / token 准确率 62.4%**
 
 ## 目录结构
 
 ```text
 .
-├── configs/                 # 训练配置
-│   ├── debug.yaml           # 小样例 smoke test
-│   └── rtx4090.yaml         # Ubuntu + RTX 4090 推荐配置
-├── examples/sample_data/    # 极小样例数据，方便本地检查代码是否跑通
-├── reports/                 # 报告模板和演示视频讲稿
-├── scripts/                 # 命令行入口
-└── src/nmt/                 # 数据、词表、模型、训练、评估、推理源码
+├── configs/cmn.yaml          # 训练/模型/解码配置
+├── data/
+│   ├── cmn-eng-simple/       # 原始数据集（已分词，制表符分隔）
+│   └── cmn/                  # prepare_cmn.py 生成的 jsonl + 词表
+├── scripts/                  # 命令行入口
+│   ├── prepare_cmn.py        # 数据 → jsonl + 词表
+│   ├── train.py / evaluate.py / translate.py
+│   └── average_checkpoints.py
+├── src/nmt/                  # 自实现源码：model/data/vocab/tokenizer/train/evaluate/inference/...
+└── reports/
+    ├── report.md             # 实验报告（方法/结果/分析）
+    ├── cmn_training_log.txt   # 逐轮训练日志
+    └── demo_script.md         # 1–2 分钟演示视频脚本
 ```
 
-## 环境安装
-
-建议在 Ubuntu GPU 环境中运行训练。
+## 环境
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
+conda create -n nmt python=3.10 -y
+conda activate nmt
 pip install -r requirements.txt
+python -c "import torch; print(torch.cuda.is_available())"   # 期望 True
 ```
 
-如果 `torch` 安装后不能识别 CUDA，请按 PyTorch 官网为你的 CUDA 版本生成安装命令，再重新安装 `torch`。
-
-## 快速自检
-
-项目内置了一个很小的样例数据集，用于检查代码、mask、checkpoint 和推理流程。
+## 运行流程
 
 ```bash
-python scripts/train.py --config configs/debug.yaml --device cpu
-python scripts/evaluate.py --checkpoint checkpoints/debug/best.pt --config checkpoints/debug/config.yaml --split test --device cpu
-python scripts/translate.py --checkpoint checkpoints/debug/best.pt --config checkpoints/debug/config.yaml --text "hello world" --device cpu
-```
+# 1) 数据准备（cmn-eng-simple 已放在 data/ 下）
+python scripts/prepare_cmn.py
+#    train=18000 valid=500 test=2636 ; en vocab=4404 zh vocab=9886
 
-这个样例数据太小，翻译效果没有实际意义，只用于确认程序可运行。
+# 2) 训练（pre-norm + 权重绑定的小模型，~4 分钟）
+python scripts/train.py --config configs/cmn.yaml --device cuda
 
-## 准备 IWSLT 数据
+# 3) 权重平均（取后段 10 轮）
+python scripts/average_checkpoints.py \
+  --checkpoints checkpoints/cmn/epoch_{51,52,53,54,55,56,57,58,59,60}.pt \
+  --output checkpoints/cmn/avg.pt
 
-在 Ubuntu 训练机上运行：
+# 4) 评估（词级 BLEU，2636 句测试集）
+python scripts/evaluate.py --checkpoint checkpoints/cmn/avg.pt \
+  --config checkpoints/cmn/config.yaml --split test --device cuda --beam-size 5 --bleu-samples 3000
 
-```bash
-python scripts/prepare_data.py \
-  --dataset IWSLT/iwslt2017 \
-  --config iwslt2017-en-zh \
-  --output-dir data/iwslt2017 \
-  --src-lang en \
-  --tgt-lang zh \
-  --src-vocab-size 32000 \
-  --tgt-vocab-size 12000
-```
-
-如果第一次下载较慢，可以先用子集快速验证：
-
-```bash
-python scripts/prepare_data.py \
-  --output-dir data/iwslt2017 \
-  --max-train-samples 20000 \
-  --max-valid-samples 1000 \
-  --max-test-samples 1000
-```
-
-生成文件：
-
-```text
-data/iwslt2017/train.jsonl
-data/iwslt2017/validation.jsonl
-data/iwslt2017/test.jsonl
-data/iwslt2017/vocab.en.json
-data/iwslt2017/vocab.zh.json
-```
-
-每行格式为：
-
-```json
-{"src": "English sentence.", "tgt": "中文句子。"}
-```
-
-## 训练
-
-RTX 4090 48GB 推荐命令：
-
-```bash
-python scripts/train.py --config configs/rtx4090.yaml --device cuda
-```
-
-继续训练：
-
-```bash
-python scripts/train.py \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --resume checkpoints/iwslt2017_en_zh/last.pt \
-  --device cuda
-```
-
-训练输出：
-
-```text
-checkpoints/iwslt2017_en_zh/best.pt
-checkpoints/iwslt2017_en_zh/last.pt
-checkpoints/iwslt2017_en_zh/train_log.jsonl
-checkpoints/iwslt2017_en_zh/config.yaml
-```
-
-## 评估
-
-```bash
-python scripts/evaluate.py \
-  --checkpoint checkpoints/iwslt2017_en_zh/best.pt \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --split test \
-  --device cuda \
-  --output outputs/test_metrics.json
-```
-
-输出包含：
-
-- `loss`：测试集交叉熵损失。
-- `token_accuracy`：忽略 `<pad>` 后的 token 级准确率。
-- `bleu`：基于中文字符 token 的 BLEU 分数。
-- `samples`：若干英文、参考中文、模型输出对照样例。
-
-## 推理演示
-
-单句翻译：
-
-```bash
-python scripts/translate.py \
-  --checkpoint checkpoints/iwslt2017_en_zh/best.pt \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --text "This talk is about machine translation." \
-  --device cuda
-```
-
-交互式翻译：
-
-```bash
-python scripts/translate.py \
-  --checkpoint checkpoints/iwslt2017_en_zh/best.pt \
-  --config checkpoints/iwslt2017_en_zh/config.yaml \
-  --device cuda
+# 5) 翻译
+python scripts/translate.py --checkpoint checkpoints/cmn/avg.pt \
+  --config checkpoints/cmn/config.yaml --beam-size 5 --device cuda --text "tom is a student ."
+# → 汤姆是个学生。
 ```
 
 ## 实现要点
 
-- 自实现 Transformer：多头注意力、位置编码、Encoder/Decoder Layer、前馈网络、残差连接和 LayerNorm。
-- 训练使用 teacher forcing：目标序列右移作为 decoder 输入，下一个 token 作为监督信号。
-- Mask 包含 source padding mask、target padding mask 和 decoder causal mask。
-- 优化器使用 AdamW，学习率使用 Transformer 原论文的 warmup + inverse square-root decay。
-- 中文默认字符级建模，避免额外中文分词模型依赖，便于复现。
+- **自实现 Transformer**：多头注意力、正弦位置编码、Encoder/Decoder Layer、前馈网络、残差 + LayerNorm（pre-norm）、线性生成器、权重绑定。
+- **训练**：teacher forcing + label smoothing 交叉熵；AdamW + Noam warmup；bf16；梯度裁剪。
+- **解码**：自实现 beam search（长度归一化）+ checkpoint averaging。
+- 数据已分词（英文 BPE、中文 jieba 词），按空格切分（`pretokenized`），**BLEU 以词为单位**统计 n 元词匹配。
 
-## 常见问题
+## 提交内容
 
-**1. 为什么不用预训练模型？**  
-课程要求是“基于 Transformer 的机器翻译”，本项目主线是从零实现 Transformer，更能体现模型结构和训练流程。
-
-**2. 为什么中文按字符切分？**  
-字符级中文 tokenizer 简单稳定，不需要 jieba 或 SentencePiece 训练。缺点是序列更长、BLEU 可能偏低，可以在报告中作为分析点。
-
-**3. 训练效果不好怎么办？**  
-先确认 loss 能下降；再增加训练 epoch、使用完整数据、适当调大 batch size，或改用更大的词表和更长训练时间。
-
-**4. 要提交哪些内容？**  
-提交源代码、README、`reports/report_template.md` 填写后的实验报告，以及按 `reports/demo_script.md` 录制的 1-2 分钟演示视频。
+| 内容 | 位置 |
+| --- | --- |
+| 可运行源代码 | `src/nmt/`、`scripts/`、`configs/cmn.yaml` |
+| 实验报告（方法/结果/分析） | [`reports/report.md`](reports/report.md) |
+| 训练日志 | [`reports/cmn_training_log.txt`](reports/cmn_training_log.txt) |
+| 演示视频脚本 | [`reports/demo_script.md`](reports/demo_script.md) |

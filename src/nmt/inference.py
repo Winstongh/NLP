@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 import torch
 
 from .config import load_config
-from .model import greedy_decode
+from .model import beam_search_decode, greedy_decode
 from .runtime import build_model, get_device, load_checkpoint, load_vocabs
 from .tokenizer import detokenize_zh, tokenize_en
 
@@ -39,19 +39,30 @@ def translate_texts(
     device: torch.device,
     src_max_len: int,
     max_len: int,
+    beam_size: int = 1,
+    length_penalty: float = 0.6,
+    no_repeat_ngram_size: int = 0,
+    src_tokenizer=tokenize_en,
+    detokenizer=detokenize_zh,
 ) -> List[str]:
     encoded = [
         torch.tensor(
-            src_vocab.encode(tokenize_en(text), add_bos=True, add_eos=True, max_len=src_max_len),
+            src_vocab.encode(src_tokenizer(text), add_bos=True, add_eos=True, max_len=src_max_len),
             dtype=torch.long,
         )
         for text in texts
     ]
     src = torch.nn.utils.rnn.pad_sequence(encoded, batch_first=True, padding_value=src_vocab.pad_idx).to(device)
-    generated = greedy_decode(model, src, bos_idx=tgt_vocab.bos_idx, eos_idx=tgt_vocab.eos_idx, max_len=max_len)
+    if beam_size and beam_size > 1:
+        generated = beam_search_decode(
+            model, src, bos_idx=tgt_vocab.bos_idx, eos_idx=tgt_vocab.eos_idx, max_len=max_len,
+            beam_size=beam_size, length_penalty=length_penalty, no_repeat_ngram_size=no_repeat_ngram_size,
+        )
+    else:
+        generated = greedy_decode(model, src, bos_idx=tgt_vocab.bos_idx, eos_idx=tgt_vocab.eos_idx, max_len=max_len)
     outputs = []
     for ids in generated.tolist():
-        # Drop <bos>/<eos>/<pad> and join Chinese character tokens for display.
+        # Drop <bos>/<eos>/<pad> and join the target tokens for display.
         tokens = tgt_vocab.decode(ids, skip_special=True, stop_at_eos=True)
-        outputs.append(detokenize_zh(tokens))
+        outputs.append(detokenizer(tokens))
     return outputs

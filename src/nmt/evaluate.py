@@ -13,7 +13,8 @@ from torch import nn
 from .data import TranslationDataset, make_dataloader, read_jsonl
 from .inference import load_inference_bundle, translate_texts
 from .metrics import corpus_bleu
-from .tokenizer import tokenize_zh
+from .runtime import get_tokenizers
+from .tokenizer import detokenize_zh, tokenize_en, tokenize_zh
 from .train import evaluate_loss
 
 
@@ -27,6 +28,9 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--bleu-samples", type=int, default=2000)
+    parser.add_argument("--beam-size", type=int, default=1, help="Beam size for decoding (1 = greedy).")
+    parser.add_argument("--length-penalty", type=float, default=0.6, help="Beam search length penalty (GNMT).")
+    parser.add_argument("--no-repeat-ngram-size", type=int, default=0, help="Block repeated n-grams (0 = off).")
     parser.add_argument("--output", default=None, help="Optional JSON metrics output path.")
     args = parser.parse_args()
 
@@ -39,6 +43,9 @@ def main() -> None:
         device_name=args.device,
         max_samples=args.max_samples,
         bleu_samples=args.bleu_samples,
+        beam_size=args.beam_size,
+        length_penalty=args.length_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
     )
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
     if args.output:
@@ -57,12 +64,16 @@ def evaluate_checkpoint(
     device_name: str | None,
     max_samples: int | None,
     bleu_samples: int,
+    beam_size: int = 1,
+    length_penalty: float = 0.6,
+    no_repeat_ngram_size: int = 0,
 ) -> Dict[str, Any]:
     model, config, src_vocab, tgt_vocab, device = load_inference_bundle(
         checkpoint_path,
         config_path=config_path,
         device_name=device_name,
     )
+    src_tok, tgt_tok, detok, bleu_tok = get_tokenizers(config)
     data_cfg = config["data"]
     train_cfg = config.get("train", {})
     decode_cfg = config.get("decode", {})
@@ -72,6 +83,8 @@ def evaluate_checkpoint(
         eval_path,
         src_vocab,
         tgt_vocab,
+        src_tokenizer=src_tok,
+        tgt_tokenizer=tgt_tok,
         src_max_len=int(data_cfg.get("src_max_len", 128)),
         tgt_max_len=int(data_cfg.get("tgt_max_len", 128)),
         max_samples=max_samples,
@@ -97,10 +110,17 @@ def evaluate_checkpoint(
         max_len=int(decode_cfg.get("max_len", 128)),
         max_samples=min(bleu_samples, len(dataset)),
         batch_size=batch_size or int(train_cfg.get("batch_size", 64)),
+        beam_size=beam_size,
+        length_penalty=length_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
+        src_tokenizer=src_tok,
+        detokenizer=detok,
+        bleu_tokenizer=bleu_tok,
     )
     return {
         "split": split,
         "num_examples": len(dataset),
+        "beam_size": beam_size,
         "loss": round(loss_stats["loss"], 6),
         "token_accuracy": round(loss_stats["accuracy"], 6),
         "bleu": round(generation["bleu"], 4),
@@ -119,6 +139,12 @@ def evaluate_generation(
     max_len: int,
     max_samples: int,
     batch_size: int,
+    beam_size: int = 1,
+    length_penalty: float = 0.6,
+    no_repeat_ngram_size: int = 0,
+    src_tokenizer=tokenize_en,
+    detokenizer=detokenize_zh,
+    bleu_tokenizer=tokenize_zh,
 ) -> Dict[str, Any]:
     examples = list(read_jsonl(path, max_samples=max_samples))
     hypotheses: List[List[str]] = []
@@ -134,10 +160,15 @@ def evaluate_generation(
             device=device,
             src_max_len=src_max_len,
             max_len=max_len,
+            beam_size=beam_size,
+            length_penalty=length_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            src_tokenizer=src_tokenizer,
+            detokenizer=detokenizer,
         )
         for item, output in zip(batch, outputs):
-            hypotheses.append(tokenize_zh(output))
-            references.append(tokenize_zh(item["tgt"]))
+            hypotheses.append(bleu_tokenizer(output))
+            references.append(bleu_tokenizer(item["tgt"]))
             if len(sample_rows) < 5:
                 sample_rows.append({"src": item["src"], "ref": item["tgt"], "hyp": output})
     return {"bleu": corpus_bleu(hypotheses, references), "samples": sample_rows}

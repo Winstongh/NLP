@@ -17,7 +17,7 @@ from tqdm import tqdm
 from .config import load_config, save_config
 from .data import TranslationDataset, make_dataloader
 from .metrics import token_accuracy
-from .runtime import build_model, get_device, load_checkpoint, load_vocabs
+from .runtime import build_model, get_device, get_tokenizers, load_checkpoint, load_vocabs
 
 
 class NoamScheduler:
@@ -50,7 +50,7 @@ class NoamScheduler:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a Transformer NMT model.")
-    parser.add_argument("--config", default="configs/rtx4090.yaml")
+    parser.add_argument("--config", default="configs/cmn.yaml")
     parser.add_argument("--device", default=None)
     parser.add_argument("--resume", default=None, help="Path to checkpoint to resume from.")
     parser.add_argument("--max-train-samples", type=int, default=None)
@@ -72,6 +72,7 @@ def train(
     set_seed(int(config.get("seed", 42)))
     device = get_device(device_name)
     src_vocab, tgt_vocab = load_vocabs(config)
+    src_tok, tgt_tok, _, _ = get_tokenizers(config)
     data_cfg = config["data"]
     train_cfg = config["train"]
     output_dir = Path(train_cfg["output_dir"])
@@ -82,6 +83,8 @@ def train(
         data_cfg["train_path"],
         src_vocab,
         tgt_vocab,
+        src_tokenizer=src_tok,
+        tgt_tokenizer=tgt_tok,
         src_max_len=int(data_cfg.get("src_max_len", 128)),
         tgt_max_len=int(data_cfg.get("tgt_max_len", 128)),
         max_samples=max_train_samples,
@@ -90,6 +93,8 @@ def train(
         data_cfg["valid_path"],
         src_vocab,
         tgt_vocab,
+        src_tokenizer=src_tok,
+        tgt_tokenizer=tgt_tok,
         src_max_len=int(data_cfg.get("src_max_len", 128)),
         tgt_max_len=int(data_cfg.get("tgt_max_len", 128)),
         max_samples=max_valid_samples,
@@ -126,7 +131,12 @@ def train(
         label_smoothing=float(train_cfg.get("label_smoothing", 0.1)),
     )
     use_amp = bool(train_cfg.get("amp", False)) and device.type == "cuda"
-    scaler = GradScaler(enabled=use_amp)
+    # Prefer bfloat16 on GPUs that support it (Ampere/Ada+). bf16 has the same
+    # exponent range as fp32, so it avoids the fp16 activation overflow that produces
+    # NaN loss in this post-norm Transformer. bf16 needs no loss scaling, so the
+    # GradScaler is only enabled for the fp16 fallback path.
+    amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = GradScaler(enabled=use_amp and amp_dtype == torch.float16)
     start_epoch = 1
     best_valid_loss = float("inf")
     if resume:
@@ -138,6 +148,7 @@ def train(
         best_valid_loss = float(checkpoint.get("best_valid_loss", best_valid_loss))
 
     print(f"Device: {device}")
+    print(f"AMP: {'on, ' + str(amp_dtype).replace('torch.', '') if use_amp else 'off (fp32)'}")
     print(f"Train examples: {len(train_dataset):,}; valid examples: {len(valid_dataset):,}")
     print(f"Source vocab: {len(src_vocab):,}; target vocab: {len(tgt_vocab):,}")
 
@@ -155,6 +166,7 @@ def train(
             pad_idx=tgt_vocab.pad_idx,
             grad_clip=float(train_cfg.get("grad_clip", 1.0)),
             use_amp=use_amp,
+            amp_dtype=amp_dtype,
             log_every=int(train_cfg.get("log_every", 100)),
         )
         valid_stats = evaluate_loss(model, valid_loader, criterion, device, pad_idx=tgt_vocab.pad_idx)
@@ -189,6 +201,18 @@ def train(
                 epoch,
                 best_valid_loss,
             )
+        # Keep per-epoch checkpoints so they can be weight-averaged later
+        # (scripts/average_checkpoints.py). Off by default.
+        if bool(train_cfg.get("save_epoch_checkpoints", False)):
+            save_checkpoint(
+                output_dir / f"epoch_{epoch}.pt",
+                model,
+                optimizer,
+                scheduler,
+                config,
+                epoch,
+                best_valid_loss,
+            )
 
 
 def run_train_epoch(
@@ -203,6 +227,7 @@ def run_train_epoch(
     pad_idx: int,
     grad_clip: float,
     use_amp: bool,
+    amp_dtype: torch.dtype = torch.float16,
     log_every: int,
 ) -> Dict[str, float]:
     model.train()
@@ -216,7 +241,11 @@ def run_train_epoch(
         tgt_input = batch["tgt_input"].to(device)
         tgt_output = batch["tgt_output"].to(device)
         token_count = int(tgt_output.ne(pad_idx).sum().item())
-        with autocast(enabled=use_amp):
+        # Set this step's LR BEFORE optimizer.step(). Otherwise the first update
+        # runs at the AdamW init lr (the Noam factor = 1.0), a catastrophic step
+        # that destroys the initialized weights and stalls training for good.
+        lr = scheduler.step()
+        with autocast(enabled=use_amp, dtype=amp_dtype):
             # Teacher forcing: decoder input is gold target shifted right;
             # tgt_output is the next-token supervision signal.
             logits = model(src, tgt_input)
@@ -227,7 +256,6 @@ def run_train_epoch(
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
-        lr = scheduler.step()
 
         total_loss += float(loss.item()) * token_count
         total_tokens += token_count
