@@ -1,92 +1,154 @@
-## 1. 方法
+# 基于 Transformer 的英译中机器翻译实验报告
 
-### 1.1 预处理
-数据集本身已经做过分词，所以这里没有再重新训练分词器。源端和目标端都直接按空格切成 token，然后只用训练集构建词表。英文里保留 BPE 的 `@@` 续接标记，中文端使用数据中已有的 jieba 分词结果。
+## 1. 实验目的
 
-### 1.2 模型结构（自实现）
-模型按标准 Transformer 实现，包括多头注意力、正弦位置编码、Encoder/Decoder layer、前馈网络、残差连接、LayerNorm 和最后的线性输出层。考虑到数据量不大，模型规模没有设得太大，同时加了比较强的 dropout。
+本实验完成一个英文到中文的神经机器翻译系统。在 PyTorch 中实现 Transformer Encoder-Decoder 的主要结构，并完成数据处理、训练、解码、测试集评估。
+
+数据集是 `cmn-eng-simple`，其中训练集 18,000 句，验证集 500 句，测试集 2,636 句。最终模型在测试集上达到 **词级 BLEU 25.72**，token 准确率为 **62.4%**。
+
+## 2. 实验环境与文件说明
+
+| 项目 | 内容 |
+| --- | --- |
+| 深度学习框架 | PyTorch |
+| 训练设备 | CUDA + bf16 混合精度；脚本也支持 CPU 推理 |
+| 数据集 | `data/cmn-eng-simple` |
+| 训练配置 | `configs/cmn.yaml` |
+| 模型源码 | `src/nmt/` |
+| 训练日志 | `reports/cmn_training_log.txt` |
+| 最终评估结果 | `outputs/cmn_final.json` |
+
+主要运行命令如下：
+
+```bash
+python scripts/prepare_cmn.py
+python scripts/train.py --config configs/cmn.yaml --device cuda
+python scripts/average_checkpoints.py \
+  --checkpoints checkpoints/cmn/epoch_{51,52,53,54,55,56,57,58,59,60}.pt \
+  --output checkpoints/cmn/avg.pt
+python scripts/evaluate.py --checkpoint checkpoints/cmn/avg.pt \
+  --config checkpoints/cmn/config.yaml --split test --device cuda --beam-size 5
+```
+
+## 3. 数据处理
+
+数据本身已经做过预分词，所以这里没有重新训练 BPE 或 jieba 分词器。处理流程如下：
+
+1. 读取原始英中句对。
+2. 按数据集划分生成 `train.jsonl`、`validation.jsonl` 和 `test.jsonl`。
+3. 只使用训练集构建英文词表和中文词表，避免把验证集、测试集的信息提前放进词表。
+4. 训练和评估时按空格切 token。
+
+训练集中的样例如下：
+
+```json
+{"src": "it 's none of your concern .", "tgt": "这不关 你 的 事 。"}
+{"src": "she has a habit of bi@@ ting her na@@ ils .", "tgt": "她 有 咬 指甲 的 习惯 。"}
+```
+
+英文端保留数据中已有的 `@@` 续接标记，中文端保留已经切好的词。模型输出仍然是中文 token 序列，展示译文时再去掉 token 之间的空格，例如 `不要 低估 我 的 力量 。` 最后显示为 `不要低估我的力量。`。
+
+## 4. 模型与训练方法
+
+### 4.1 模型结构
+
+模型是自实现的 Transformer，没有使用 PyTorch 封装好的完整翻译模型。实现内容包括：
+
+- 多头自注意力和 Encoder-Decoder cross attention；
+- 正弦位置编码；
+- Encoder layer 和 Decoder layer；
+- 前馈网络、残差连接和 LayerNorm；
+- target embedding 与输出层权重绑定；
+- greedy search 和 beam search 解码。
+
+模型规模没有设得很大，主要是考虑到数据集只有 18k 条训练样本。最终配置如下：
 
 | 超参 | 值 |
-| --- | --- |
-| d_model / heads | 256 / 4 |
-| encoder / decoder layers | 4 / 4 |
+| --- | ---: |
+| `d_model` | 256 |
+| attention heads | 4 |
+| encoder layers | 4 |
+| decoder layers | 4 |
 | feed-forward dim | 1024 |
 | dropout | 0.3 |
-| 归一化 | **pre-norm** |
-| 权重绑定(tgt emb↔输出层) | **是** |
-| 参数量 | **11.0 M** |
+| LayerNorm 方式 | pre-norm |
+| target embedding / output 权重绑定 | 是 |
+| 参数量 | 约 11.0 M |
 
-前期试过几种配置，pre-norm 明显比 post-norm 好训一些；目标端 embedding 和输出层做权重绑定后，验证集表现也更稳。
+前期试过 post-norm，收敛不如 pre-norm 稳定。这个数据规模下，pre-norm 加较大的 dropout 更容易训起来。target embedding 和输出层做权重绑定后，验证集表现也更稳一些。
 
-### 1.3 训练策略
-- 训练时使用 teacher forcing；损失函数是交叉熵，忽略 `<PAD>`，并加入 0.1 的 label smoothing。
-- 优化器为 AdamW（betas 0.9/0.98, eps 1e-9），学习率使用 Noam 调度，warmup step 设为 2000。
-- 使用 bf16 混合精度训练，梯度裁剪为 1.0，batch size 为 128，一共训练 60 个 epoch。单轮大约 3 秒，总训练时间约 4 分钟。
+### 4.2 训练策略
 
-### 1.4 解码与后处理
-- 解码部分自己实现了 beam search，beam size 设为 5，并加入长度归一化。
-- 最终模型没有直接取某一个 epoch，而是对训练后段的若干个 checkpoint 做平均。
-- 模型输出仍然是中文词序列，展示译文时再去掉词之间的空格。例如 `不要 低估 我 的 力量 。` 最后显示为 `不要低估我的力量。`。
+训练时采用 teacher forcing，损失函数为交叉熵，忽略 `<PAD>`，并加入 0.1 的 label smoothing。优化器使用 AdamW，学习率采用 Noam 调度，warmup steps 为 2000，梯度裁剪为 1.0。
 
+训练共 60 个 epoch，batch size 为 128。日志中记录的单轮时间约 1.8 到 2.1 秒，完整训练时间约 4 分钟。训练脚本使用 bf16 混合精度，因此在有 CUDA 的机器上速度比较快。
 
-## 2. 实验结果
+### 4.3 解码和模型选择
 
-### 2.1 训练曲线（验证集）
+测试时使用 beam search，beam size 设为 5，并加入长度归一化。最终提交的模型不是单个 epoch 的 checkpoint，而是平均 epoch 51 到 60 的权重。
+
+这样做的原因是：epoch 21 的 `valid_loss` 最低，但后面的 `valid_acc` 仍然继续上升。直接取最低 loss 的模型，BLEU 只有 21.16；平均后段权重后，BLEU 提升到 25 分以上。
+
+## 5. 实验结果
+
+### 5.1 训练过程
+
+训练日志中可以看到，前期 loss 下降很明显，验证集准确率也从 0.13 提升到 0.63 左右。
+
 | epoch | train_loss | valid_loss | valid_acc |
 | ---: | ---: | ---: | ---: |
 | 1 | 8.364 | 7.158 | 0.130 |
 | 5 | 4.914 | 4.788 | 0.420 |
 | 10 | 3.870 | 4.019 | 0.522 |
 | 20 | 2.795 | 3.601 | 0.601 |
-| **21** | 2.78 | **3.576** | 0.607 |
+| 21 | 2.732 | **3.576** | 0.607 |
 | 40 | 2.104 | 3.637 | 0.624 |
-| 51 | — | 3.64 | **0.637** |
+| 51 | 1.962 | 3.657 | **0.637** |
 | 60 | 1.887 | 3.667 | 0.633 |
 
-从曲线看，`valid_loss` 在 epoch 21 最低，之后开始缓慢上升，说明后面已经有一点过拟合。不过 `valid_acc` 没有立刻下降，而是继续涨到 epoch 51 附近的 0.637。因此最后没有只用 loss 最低的 checkpoint，而是尝试平均后段权重。完整逐轮训练日志见 [`cmn_training_log.txt`](cmn_training_log.txt)。
+这里也能看出一个问题：epoch 21 之后训练 loss 继续下降，但验证 loss 不再下降，说明模型已经开始轻微过拟合。不过验证准确率还在小幅波动上升，所以我没有简单停在 epoch 21，而是用 checkpoint averaging 降低单个 checkpoint 的波动。
 
-### 2.2 测试集最终结果（2,636 句，beam=5）
-| 模型 | token_accuracy | **词级 BLEU** |
-| --- | ---: | ---: |
-| best.pt（epoch 21，min valid_loss） | 58.9% | 21.16 |
-| 平均 epoch 46–54 | 62.2% | 25.49 |
-| **平均 epoch 51–60（最终）** | **62.4%** | **25.72** |
+### 5.2 测试集指标
 
-## 3.分析
+最终测试集结果来自 `outputs/cmn_final.json`：
 
-### 3.1 消融实验
+| 模型 | 测试句数 | beam size | token accuracy | 词级 BLEU |
+| --- | ---: | ---: | ---: | ---: |
+| best.pt（epoch 21，valid_loss 最低） | 2,636 | 5 | 58.9% | 21.16 |
+| 平均 epoch 46-54 | 2,636 | 5 | 62.2% | 25.49 |
+| 平均 epoch 51-60（最终） | 2,636 | 5 | **62.4%** | **25.72** |
 
-| 改动 | BLEU | Δ |
-| --- | ---: | ---: |
-| best.pt（单 checkpoint） | 21.16 | — |
-| + 平均后段 5 轮 | 25.49 | +4.33 |
-| **+ 平均后段 10 轮（最终）** | **25.72** | +4.56 |
+从结果看，checkpoint averaging 是本实验中最明显的提升点，带来了约 4.5 BLEU 的提高。
 
-这组结果里，checkpoint averaging 的收益最明显。直接用 epoch 21 的 best.pt，BLEU 只有 21.16；把后段 checkpoint 平均后可以到 25 分以上。后期单个模型虽然 loss 不再最好，但预测准确率更高，平均权重后能把这种收益保留下来，同时减少单个 checkpoint 的波动。架构方面，pre-norm 和权重绑定主要解决的是训练稳定性问题；前期试 post-norm 时收敛很差，后续实验就没有继续沿用。
+### 5.3 翻译样例
 
-### 3.2 翻译样例（最终模型, beam=5）
-
-| 英文输入 | 模型输出 | 参考 |
+| 英文输入 | 模型输出 | 参考译文 |
 | --- | --- | --- |
-| tom is a student . | 汤姆是个学生。 | 汤姆是个学生。 |
-| now is the time to act . | 现在是行动的时候了。 | 现在是行动的时候了。 |
-| do n't underestimate my power . | 不要低估我的力量。 | 不要小看我的力量。 |
-| you have n't changed at all . | 你一点都没变。 | 你真的一点没变。 |
-| i was just talking about tom . | 我刚跟汤姆说话。 | 我仅仅是在和 Tom 交谈。 |
+| `tom is a student .` | 汤姆是个学生。 | 汤姆是个学生。 |
+| `now is the time to act .` | 现在是行动的时候了。 | 现在是行动的时候了。 |
+| `do n't underestimate my power .` | 不要低估我的力量。 | 不要小看我的力量。 |
+| `you have n't changed at all .` | 你一点都没变。 | 你真的一点没变。 |
+| `could you please talk a bit louder ? i ca n't hear very well .` | 请你说话大声一点吗？ | 你能大声点讲吗？我听不太清。 |
 
-从这些例子看，短句的翻译效果比较稳定。有些句子和参考答案完全一致，也有一些是语义接近但表达不同，例如 “低估” 和 “小看”。
+短句的效果比较稳定，常见句式可以翻得比较准确。长一点的句子更容易丢信息，比如最后一个例子只翻出了“请说大声一点”，没有翻出“我听不太清”。
 
-### 3.3 误差分析
+## 6. 分析
 
-- **同义表达会影响 BLEU**：例如模型输出“低估”，参考是“小看”，意思基本一样，但 BLEU 按 n-gram 匹配计算，这类情况会被扣分。
-- **长句容易漏信息**：遇到两个分句或修饰成分较多的句子时，模型偶尔只翻译前半部分。
-- **专有名词不够统一**：Tom 有时会保留英文，有时会译成“汤姆”，大小写和译写方式不稳定。
-- **后期有轻微过拟合**：数据量只有 18k 左右，epoch 21 以后验证集 loss 开始回升。checkpoint averaging 能缓解一部分，但不能完全解决数据规模带来的限制。
+### 6.1 有效的部分
 
+本实验里比较有效的改动主要有三个：
 
-## 4. 结论
+1. **学习率调度顺序修正**：一开始训练不稳定，检查后发现学习率更新顺序会影响 Noam schedule 的实际效果，修正后模型才正常收敛。
+2. **pre-norm + 权重绑定**：小数据集上训练更稳，参数量也更合理。
+3. **beam search + checkpoint averaging**：beam search 让输出比 greedy 更稳定；checkpoint averaging 明显提升 BLEU。
 
-本次实验在 cmn-eng-simple 数据集上，用 PyTorch 自实现 Transformer 完成英译中任务。最终测试集结果为 **词级 BLEU 25.72 / token 准确率 62.4%**。整体上，短句翻译比较可靠，常见表达能翻出来；但在长句、专有名词和同义表达上仍然有明显误差。
+### 6.2 主要问题
 
-对结果影响比较大的部分有三点：一是修复学习率调度顺序，否则模型基本学不动；二是使用 pre-norm 和权重绑定，让小模型训练更稳定；三是 beam search 加 checkpoint averaging，其中权重平均带来了约 4.5 BLEU 的提升。后续如果要继续提高效果，可能需要更多训练数据，或者在中文分词、子词建模和长句处理上再做改进。
+1. **BLEU 对同义表达不友好**：例如模型输出“低估”，参考译文是“小看”，意思接近，但 n-gram 匹配还是会扣分。
+2. **长句容易漏译**：两个分句以上的句子，模型有时只保留前半部分信息。
+3. **专有名词不统一**：Tom 有时翻译成“汤姆”，有时保留英文 `Tom`。
+4. **数据规模有限**：训练集只有 18k 句，后期已经能看到过拟合迹象。
 
+## 8. 结论
+
+本实验用 PyTorch 自实现 Transformer 完成了 cmn-eng-simple 数据集上的英译中任务。最终模型使用 4 层 Encoder、4 层 Decoder，参数量约 11M，在测试集 2,636 句上取得 **词级 BLEU 25.72 / token 准确率 62.4%**。从实验过程看，模型已经能比较稳定地处理简单短句，但长句漏译、专有名词不统一和同义表达评分偏低仍然明显。
