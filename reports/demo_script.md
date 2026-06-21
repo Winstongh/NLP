@@ -1,6 +1,32 @@
 # 1–2 分钟程序演示视频脚本（cmn-eng-simple）
 
 > 目标：1–2 分钟内展示「数据 → 训练 → 评估(BLEU) → 翻译」完整流程。
+
+## 已自动录制（终端实录，约 53 秒）
+
+整个演示已用一键脚本跑通并录制：
+
+```bash
+bash scripts/demo.sh                                  # 直接看演示（终端里运行）
+asciinema rec reports/demo.cast -c "bash scripts/demo.sh"   # 重新录制
+asciinema play reports/demo.cast                      # 回放录制
+```
+
+产物：
+- `reports/demo.cast` — asciinema 终端录像（可回放 / 上传 asciinema.org 得分享链接）
+- `reports/demo.svg` — 动画 SVG，**浏览器直接打开即可播放**
+
+**得到最终 .mp4 视频**（任选其一）：
+1. 浏览器打开 `reports/demo.svg`，用任意录屏软件录这 53 秒 → 导出 mp4（最简单）；
+2. 或终端 `asciinema play reports/demo.cast` 时录屏；
+3. 如需配音解说，照下面分镜讲解即可。
+
+> 注：我（助手）无法直接产出带语音的屏幕录像 mp4，上面是已经录好的程序实跑画面，你做最后一步录屏/配音即可。
+
+---
+
+## 分镜讲稿（可照着配音）
+
 > 录屏前先 `conda activate nmt`，工作目录 `/home/zj/cw/NLP`。
 
 ## 0:00–0:15 项目简介
