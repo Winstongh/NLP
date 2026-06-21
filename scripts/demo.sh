@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# 1-2 分钟程序演示：基于 Transformer 的英译中机器翻译（cmn-eng-simple）
-# 录制： asciinema rec reports/demo.cast --overwrite -c "bash scripts/demo.sh"
-#   或直接看： bash scripts/demo.sh
+
 PY=/home/zj/anaconda3/envs/nmt/bin/python
 p(){ sleep "${1:-1.5}"; }
 say(){ printf "\n\033[1;36m▶ %s\033[0m\n" "$1"; p 1.2; }

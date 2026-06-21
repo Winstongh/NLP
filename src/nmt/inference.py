@@ -1,5 +1,3 @@
-"""Inference helpers shared by evaluate.py and translate.py."""
-
 from __future__ import annotations
 
 from pathlib import Path

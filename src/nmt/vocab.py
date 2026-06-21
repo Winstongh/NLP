@@ -1,5 +1,3 @@
-"""Vocabulary utilities for sequence-to-sequence translation."""
-
 from __future__ import annotations
 
 from collections import Counter

@@ -1,5 +1,3 @@
-"""Training entrypoint for the Transformer NMT model."""
-
 from __future__ import annotations
 
 import argparse

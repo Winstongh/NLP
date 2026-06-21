@@ -1,7 +1,5 @@
 seed: 42
 
-# 指定数据集 cmn-eng-simple（18k/500/2636）。数据已分词：英文 BPE、中文 jieba 词，
-# 空格分隔，故 pretokenized=true（按空格切分），BLEU 以词为单位。
 data:
   train_path: data/cmn/train.jsonl
   valid_path: data/cmn/validation.jsonl
@@ -13,7 +11,7 @@ data:
   tgt_max_len: 64
   num_workers: 4
 
-# 数据小(18k)，用较小模型 + 较强 dropout 抑制过拟合；保留 pre-norm + 权重绑定。
+
 model:
   d_model: 256
   n_heads: 4

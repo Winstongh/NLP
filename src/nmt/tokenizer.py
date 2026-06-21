@@ -1,10 +1,3 @@
-"""Small tokenizers used by the course NMT project.
-
-The goal is reproducibility, so the default tokenizers avoid external models.
-English uses a regex tokenizer; Chinese uses character-level tokens with ASCII
-runs preserved, which works well enough for a compact Transformer baseline.
-"""
-
 from __future__ import annotations
 
 import re
@@ -71,12 +64,6 @@ def join_zh_words(tokens: Iterable[str]) -> str:
 
 
 def join_spaced(tokens: Iterable[str]) -> str:
-    """Join tokens with single spaces, keeping word boundaries.
-
-    Used as the detokenizer for already-tokenized (word-segmented) data so that
-    BLEU can re-split on whitespace and compare word n-grams correctly.
-    """
-
     return " ".join(t for t in tokens if t).strip()
 
 

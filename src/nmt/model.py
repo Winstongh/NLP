@@ -1,5 +1,3 @@
-"""A compact Transformer encoder-decoder implemented with PyTorch modules."""
-
 from __future__ import annotations
 
 import math
@@ -272,12 +270,6 @@ def beam_search_decode(
     length_penalty: float = 0.6,
     no_repeat_ngram_size: int = 0,
 ) -> torch.Tensor:
-    """Batched beam search with GNMT-style length normalization.
-
-    When ``no_repeat_ngram_size > 0``, tokens that would create an already-seen
-    n-gram are blocked (reduces the repetition failure mode).
-    """
-
     model.eval()
     device = src.device
     batch_size = src.size(0)

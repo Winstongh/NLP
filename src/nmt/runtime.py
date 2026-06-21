@@ -1,5 +1,3 @@
-"""Shared runtime helpers for train/evaluate/translate commands."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,13 +11,6 @@ from .vocab import Vocab
 
 
 def get_tokenizers(config: Dict[str, Any]):
-    """Return (src_tok, tgt_tok, tgt_detok, bleu_tok) based on config.
-
-    Set ``data.pretokenized: true`` for datasets that are already tokenized
-    (whitespace-separated tokens, e.g. cmn-eng-simple); otherwise the default
-    regex-English / character-Chinese tokenizers are used.
-    """
-
     if bool(config.get("data", {}).get("pretokenized", False)):
         # space-join so BLEU can re-split into word tokens (the reference is space-separated)
         return whitespace_tokenize, whitespace_tokenize, join_spaced, whitespace_tokenize

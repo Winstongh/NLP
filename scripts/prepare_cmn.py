@@ -1,11 +1,3 @@
-"""Convert the provided cmn-eng-simple dataset (already tokenized: English BPE,
-Chinese jieba word-segmented, tab-separated) into the project's jsonl format,
-and build vocabularies from the whitespace tokens.
-
-Input : data/cmn-eng-simple/{training,validation,testing}.txt
-Output: data/cmn/{train,validation,test}.jsonl + vocab.en.json + vocab.zh.json
-"""
-
 from pathlib import Path
 import sys
 

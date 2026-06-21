@@ -1,14 +1,3 @@
-"""Average the weights of several checkpoints (a standard Transformer-MT trick
-that reliably gains a bit of BLEU for free).
-
-Requires per-epoch checkpoints, e.g. trained with `train.save_epoch_checkpoints: true`.
-
-Example — average the last 5 epochs:
-    python scripts/average_checkpoints.py \
-        --checkpoints checkpoints/cmn/epoch_{51,52,53,54,55,56,57,58,59,60}.pt \
-        --output checkpoints/cmn/avg.pt
-"""
-
 from pathlib import Path
 import sys
 
